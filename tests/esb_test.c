@@ -61,8 +61,11 @@ static void session(void)
 		assert(tx_schedule(&tx, 7000 + 2000 * i, transmit) && packet.data.input.seq == i);
 		ack = receiver_frame(&rx, &packet, 7 + 2*i, lamp, nonce);
 		if (i == 1) {
-			assert(tx_schedule(&tx, 10000, transmit) && packet.data.input.seq == i);
-			ack = receiver_frame(&rx, &packet, 10, lamp, nonce);
+			/* Lost ACK: duplicate the RF packet at RX. The sender may already
+			 * be replaying #2; its cumulative ACK must cover the missing ACK. */
+			receiver_frame(&rx, &packet, 7 + 2*i, lamp, nonce);
+			assert(rx.count == 1 && tx.status.rx_accept == 0);
+			continue;
 		}
 		tx_ack(&tx, &ack, 7 + 2*i);
 		assert(tx.status.rx_accept == i && tx.status.usb_done == 0);

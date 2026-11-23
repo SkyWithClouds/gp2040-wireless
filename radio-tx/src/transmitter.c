@@ -93,6 +93,11 @@ void tx_ack(struct transmitter *t, const struct gp_frame *f, uint32_t now)
 	t->last_peer = now;
 	s->flags |= GP_RX_ACCEPT_VALID;
 	s->rx_accept = ack->rx_accept;
+	if (t->replaying) {
+		if (s->rx_accept == t->replay_end) t->replaying = false;
+		else if (!within(t->replay_next, (uint16_t)(s->rx_accept + 1), t->replay_end))
+			t->replay_next = (uint16_t)(s->rx_accept + 1);
+	}
 	if (ack->flags & GP_USB_DONE_VALID) {
 		if (!(s->flags & GP_USB_DONE_VALID) || ack->usb_done != s->usb_done)
 			t->last_progress = now;
@@ -138,6 +143,10 @@ bool tx_schedule(struct transmitter *t, uint32_t now_us, bool (*send)(const stru
 		if (t->sync_sent && elapsed < GP_POLL_TARGET_US) return false;
 		f.type = GP_SYNC;
 		f.data.input = t->sync;
+	} else if (t->replaying && within(t->replay_next, (uint16_t)(s->rx_accept + 1), t->sent) &&
+		   t->sent != s->rx_accept) {
+		f.type = GP_INPUT;
+		f.data.input = t->window[t->replay_next % GP_WINDOW];
 	} else if (t->phase == ACTIVE && t->sent != s->tx_accept) {
 		f.type = GP_INPUT;
 		f.data.input = t->window[(uint16_t)(t->sent + 1) % GP_WINDOW];
@@ -156,7 +165,18 @@ bool tx_schedule(struct transmitter *t, uint32_t now_us, bool (*send)(const stru
 	if (f.type == GP_RESET) t->notify_reset = false;
 	if (f.type == GP_SYNC) t->sync_sent = true;
 	if (f.type == GP_HEARTBEAT) t->heartbeat_pending = false;
-	if (f.type == GP_INPUT && f.data.input.seq == (uint16_t)(t->sent + 1))
-		t->sent = f.data.input.seq;
+	if (f.type == GP_INPUT) {
+		uint16_t seq = f.data.input.seq;
+		if (seq == (uint16_t)(t->sent + 1)) {
+			t->sent = seq;
+			t->replaying = false;
+		} else {
+			/* RX discarded later records after a gap. Replay that suffix in
+			 * order without waiting an ACK round-trip for every missing record. */
+			if (!t->replaying) t->replay_end = t->sent;
+			t->replaying = seq != t->replay_end;
+			t->replay_next = (uint16_t)(seq + 1);
+		}
+	}
 	return true;
 }

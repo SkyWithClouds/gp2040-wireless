@@ -16,15 +16,19 @@ static struct {
 	uint8_t rx[GP_WIRE_SIZE + 1] __aligned(4);
 } dma[2];
 static unsigned bank;
+static atomic_t wait_cs_high;
 static atomic_t received; /* 0 waiting, otherwise byte count + 1 */
 
 static void event(const nrfx_spis_evt_t *e, void *context)
 {
 	ARG_UNUSED(context);
-	if (e->evt_type == NRFX_SPIS_BUFFERS_SET_DONE && nrf_gpio_pin_read(CS))
-		NRF_GPIOTE->TASKS_SET[ready_task] = 1;
-	if (e->evt_type == NRFX_SPIS_XFER_DONE)
+	if (e->evt_type == NRFX_SPIS_BUFFERS_SET_DONE) {
+		if (nrf_gpio_pin_read(CS)) NRF_GPIOTE->TASKS_SET[ready_task] = 1;
+		else atomic_set(&wait_cs_high, 1);
+	} else if (e->evt_type == NRFX_SPIS_XFER_DONE) {
+		atomic_clear(&wait_cs_high);
 		atomic_set(&received, 1 + e->rx_amount);
+	}
 }
 
 int spi_init(void)
@@ -62,7 +66,15 @@ int spi_arm(const struct gp_frame *reply)
 
 int spi_take(struct gp_frame *frame)
 {
+	/* A master may hold CS low at power-up. Advertise this buffer once
+	 * after release; a subsequent falling edge still clears READY in hardware. */
+	unsigned int key = irq_lock();
+	if (atomic_get(&wait_cs_high) && nrf_gpio_pin_read(CS)) {
+		atomic_clear(&wait_cs_high);
+		NRF_GPIOTE->TASKS_SET[ready_task] = 1;
+	}
 	atomic_val_t count = atomic_set(&received, 0);
+	irq_unlock(key);
 	if (!count) return 0;
 	return gp_decode(frame, dma[bank].rx, count - 1) ? 1 : -1;
 }

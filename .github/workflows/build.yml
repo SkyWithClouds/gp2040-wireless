@@ -26,6 +26,9 @@ jobs:
           cc -std=c11 -Wall -Wextra -Werror -pedantic -Icommon -Iusb-rx/src -Iradio-tx/src \
             tests/esb_test.c usb-rx/src/receiver.c radio-tx/src/transmitter.c -o /tmp/test-esb
           /tmp/test-esb
+          cc -std=c11 -Wall -Wextra -Werror -pedantic -Icommon -Ipico-host/src -Iusb-rx/src -Iradio-tx/src \
+            tests/full_test.c pico-host/src/source.c usb-rx/src/receiver.c radio-tx/src/transmitter.c -o /tmp/test-full
+          /tmp/test-full
 
   nordic:
     if: github.event_name == 'workflow_dispatch'
@@ -75,6 +78,11 @@ jobs:
               radio-tx) filename=01-transmitter-esb-nologo-26000.uf2 ;;
               usb-rx) filename=02-receiver-esb-nologo-26000.uf2 ;;
             esac
+          elif [[ "$STAGE" == full ]]; then
+            case "$APP" in
+              radio-tx) filename=02-transmitter-full.uf2 ;;
+              usb-rx) filename=03-receiver-full.uf2 ;;
+            esac
           fi
           cp build/zephyr/zephyr.uf2 "package/$filename"
       - uses: actions/upload-artifact@v4
@@ -84,6 +92,7 @@ jobs:
           if-no-files-found: error
 
   pico:
+    name: pico-host
     if: github.event_name == 'workflow_dispatch' && inputs.stage == 'full'
     needs: protocol
     runs-on: ubuntu-24.04
@@ -112,14 +121,15 @@ jobs:
       - name: Install Pico toolchain and build
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib libusb-1.0-0-dev ninja-build
+          sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib libusb-1.0-0-dev pkg-config patch ninja-build
           cmake -S bridge/pico-host -B build -G Ninja -DPICO_BOARD=pico \
             -DPICO_SDK_PATH="$PWD/deps/pico-sdk" -DPICO_PIO_USB_PATH="$PWD/deps/pio-usb" \
             -DTUSB_XINPUT_PATH="$PWD/deps/tusb_xinput" -DPICOTOOL_GIT_BRANCH=a7eb3988f0645239185fadb4e25d8279478c2dbb
           cmake --build build
-          test -s build/pico-host.uf2
+          python3 bridge/scripts/check_receiver_uf2.py build/pico-host.uf2 build/pico-host.bin --pico
+          cp build/pico-host.uf2 build/01-pico-host-full.uf2
       - uses: actions/upload-artifact@v4
         with:
           name: pico-host-full-${{ github.sha }}
-          path: build/pico-host.uf2
+          path: build/01-pico-host-full.uf2
           if-no-files-found: error

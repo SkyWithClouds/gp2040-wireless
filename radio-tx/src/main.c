@@ -4,6 +4,7 @@
 #include "spi.h"
 #include "transmitter.h"
 
+#ifdef BRIDGE_DEMO
 struct demo_source {
 	struct gp_input queue[GP_QUEUE_SIZE];
 	uint16_t produced, released, last_buttons;
@@ -74,11 +75,15 @@ static void demo_tick(struct demo_source *d, struct transmitter *t, uint32_t now
 	}
 }
 
+#endif
+
 int main(void)
 {
 	static struct transmitter tx;
+#ifdef BRIDGE_DEMO
 	static struct demo_source demo;
 	bool external = false;
+#endif
 	tx_reset(&tx, GP_REBOOT);
 	int rc = air_start(false);
 	if (rc) return rc;
@@ -93,10 +98,15 @@ int main(void)
 		while (air_receive(&frame)) tx_ack(&tx, &frame, now);
 		int transaction = spi_take(&frame);
 		if (transaction > 0) {
+#ifdef BRIDGE_DEMO
 			if (frame.type == GP_HELLO) external = true;
-			if (external) tx_source(&tx, &frame, now);
+			if (external)
+#endif
+				tx_source(&tx, &frame, now);
 		}
+#ifdef BRIDGE_DEMO
 		if (!external) demo_tick(&demo, &tx, now);
+#endif
 		if (transaction) {
 			struct gp_frame reply = tx_reply(&tx);
 			rc = spi_arm(&reply);

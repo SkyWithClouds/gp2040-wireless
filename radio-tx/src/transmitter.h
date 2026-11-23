@@ -12,7 +12,8 @@ struct transmitter {
 	struct gp_heartbeat heartbeat;
 	struct gp_input sync, window[GP_WINDOW];
 	struct gp_status status;
-	uint16_t sent;
+	uint16_t sent, replay_next, replay_end;
+	bool replaying;
 	uint32_t last_live, last_peer, last_progress, last_air_us, poll_overdue;
 };
 
