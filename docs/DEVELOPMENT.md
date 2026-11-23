@@ -1,6 +1,6 @@
 # 开发与实板验收
 
-**当前已完成协议与 CI 骨架，三端固件处于分阶段开发状态。** 已提供阶段 1 应用和暂定板定义。固件在 GitHub Actions 构建，按接收端、双板无线、完整链路的顺序上板。字节偏移、超时和确认语义以 [v1.0 协议规范](PROTOCOL_SPEC.md) 为准。
+**当前已完成协议与 CI 骨架，三端固件处于分阶段开发状态。** 阶段 1 免驱、输入与 1P 灯通过实板验收。两块板的引导器信息见[实板记录](../boards/nologo/nologo_promicro/README.md)。阶段 2 已提供双板固件，等待实板验收。固件在 GitHub Actions 构建，按接收端、双板无线、完整链路的顺序上板。字节偏移、超时和确认语义以 [v1.0 协议规范](PROTOCOL_SPEC.md) 为准。
 
 ## 模块边界
 
@@ -51,13 +51,13 @@ gh workflow run build.yml -f stage=xinput
 | `esb` | `usb-rx`、`radio-tx` | `usb-rx-esb-<sha>`、`radio-tx-esb-<sha>` |
 | `full` | 两个 nRF 应用及 `pico-host` | `usb-rx-full-<sha>`、`radio-tx-full-<sha>`、`pico-host-full-<sha>` |
 
-nRF 任务使用 Zephyr Arm 工具链 0.16.8、[west 清单](../west.yml) 中的 nRF Connect SDK v2.9.2、`--no-sysbuild` 和 `BRIDGE_STAGE`，期望产物为 `build/zephyr/zephyr.uf2`。Pico 任务从工作流指定的提交取 Pico SDK、Pico-PIO-USB 和 tusb_xinput，传入 `PICO_BOARD=pico`，应用须通过 `pico_add_extra_outputs` 产生 `build/pico-host.uf2`。两个 nRF 应用及 Pico 应用都需提供自己的 `CMakeLists.txt`。当前选择 `xinput`；`esb` 和 `full` 尚待实现。上传 UF2 前，工作流会检查每块写地址、Family ID、初始栈指针与复位向量，并将负载同链接生成的二进制比对。
+nRF 任务使用 Zephyr Arm 工具链 0.16.8、[west 清单](../west.yml) 中的 nRF Connect SDK v2.9.2、`--no-sysbuild` 和 `BRIDGE_STAGE`，期望产物为 `build/zephyr/zephyr.uf2`。Pico 任务从工作流指定的提交取 Pico SDK、Pico-PIO-USB 和 tusb_xinput，传入 `PICO_BOARD=pico`，应用须通过 `pico_add_extra_outputs` 产生 `build/pico-host.uf2`。两个 nRF 应用及 Pico 应用都需提供自己的 `CMakeLists.txt`。当前可以选择 `xinput` 或 `esb`。`full` 尚待实现。上传 UF2 前，工作流会检查每块写地址、Family ID、初始栈指针与复位向量，并将负载同链接生成的二进制比对。
 
 ## 实板验收顺序
 
 ### 1 · 接收端 XInput 枚举
 
-当前分区假设：`[0x26000, 0xEC000)` 为应用，其后保留存储区，`0xF4000` 起为引导器及设置。Family ID 为 `0xADA52840`。刷写前核对两块板各自的引导器资料；若实板要求 `0x27000` 等其他起址，先修改设备树及 UF2 校验脚本后重新构建。[nice!nano 参考布局](https://github.com/zmkfirmware/zmk/blob/main/app/module/boards/nicekeyboards/nice_nano/nice_nano.dts)
+当前分区定义为`[0x26000, 0xEC000)` 为应用，其后保留存储区，`0xF4000` 起为引导器及设置。Family ID 为 `0xADA52840`。刷写前核对两块板各自的引导器资料；若实板要求 `0x27000` 等其他起址，先修改设备树及 UF2 校验脚本后重新构建。[nice!nano 参考布局](https://github.com/zmkfirmware/zmk/blob/main/app/module/boards/nicekeyboards/nice_nano/nice_nano.dts)
 
 阶段 1 使用共享私有测试 VID/PID `1209:0001`，这个编号不唯一，仅限内部试验。发行硬件前请在 `usb-rx/prj.conf` 换成获分配的 VID/PID。若 Windows 缓存了另一台相同 VID/PID 的测试设备，使用干净的 Windows 实例复测。[pid.codes 测试编号使用条件](https://pid.codes/1209/0001/)
 
@@ -65,6 +65,19 @@ nRF 任务使用 Zephyr Arm 工具链 0.16.8、[west 清单](../west.yml) 中的
 - 用 USBPcap 记录控制请求、IN 完成及主机真实发出的玩家灯 OUT。将总线上的命令与 #2 调试记录对照。另用命令样本覆盖灭灯、1P–4P 和截断 OUT；确认下一个 OUT 仍能被接收。保存枚举记录与抓包作为本阶段基线。
 
 ### 2 · 双 nRF ESB 链路
+
+以下命令运行与固件相同的收发状态机，用可控时钟和延迟的 USB 完成事件检查满窗口、丢包、过期确认、序号回绕、断联和停滞清零。
+
+```sh
+cc -std=c11 -Wall -Wextra -Werror -pedantic -Icommon -Iusb-rx/src -Iradio-tx/src \
+  tests/esb_test.c usb-rx/src/receiver.c radio-tx/src/transmitter.c -o /tmp/test-esb
+/tmp/test-esb
+gh workflow run build.yml -f stage=esb
+```
+
+#1 默认内置节拍发生器，经与 SPI 同一套状态机发送。收到第一条有效 SPI HELLO 后，#1 在本次上电期间改用外部输入和心跳；要恢复内置测试，断开 SPI 主机并重启 #1。#2 仅把会话收到的输入提交到 USB。阶段 2 的最后一秒用于观察灯命令到达 #1 后返回 PC 的完整往返。内置输入源不设置原板灯已应用标志。
+
+用 USBPcap 记录 `0x81` 的成功 IN 数据及 `0x02` 的玩家灯 OUT，按[玩家指南](USER_GUIDE.md)的时序核对。4 ms 段预期四个按钮值为 `1000 → 3000 → 2000 → 0000`（十六进制）。记录第一个和最后一个变化的主机时间。只断 #1，在 A 保持期间用同一时间基准记录断电边沿和 #2 中立 IN；50 ms 从最后一次有效新输入或新心跳起算，实际 USB 时间还包括主机轮询。按相反顺序上电及重插 #2，均应恢复到当前快照。
 
 - 用确定的输入序列联调 #1 → #2。人为跳过一次 ACK Payload、重复一帧、制造缺号并跨越 65535 回绕。比较无线记录与 USB 报告，检查每个有效变化恰好提交一次、顺序正确、累计确认不倒退。
 - 让 USB 暂停接收，分别观察窗口填满、队列溢出及停滞恢复。断开一端并重新上电，检查旧会话的输入和灯应答被丢弃。恢复只允许先清零再同步当前状态。

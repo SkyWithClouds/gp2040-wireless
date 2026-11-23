@@ -23,6 +23,9 @@ jobs:
           /tmp/test-protocol
           cc -std=c11 -Wall -Wextra -Werror -pedantic -Iusb-rx/src tests/xinput_test.c usb-rx/src/reports.c -o /tmp/test-xinput
           /tmp/test-xinput
+          cc -std=c11 -Wall -Wextra -Werror -pedantic -Icommon -Iusb-rx/src -Iradio-tx/src \
+            tests/esb_test.c usb-rx/src/receiver.c radio-tx/src/transmitter.c -o /tmp/test-esb
+          /tmp/test-esb
 
   nordic:
     if: github.event_name == 'workflow_dispatch'
@@ -65,10 +68,19 @@ jobs:
           west build --no-sysbuild -b nologo_promicro/nrf52840 -d build "bridge/$APP" -- \
             -DBOARD_ROOT="$PWD/bridge" -DBRIDGE_STAGE="$STAGE"
           python3 bridge/scripts/check_receiver_uf2.py build/zephyr/zephyr.uf2 build/zephyr/zephyr.bin
+          mkdir -p package
+          filename=zephyr.uf2
+          if [[ "$STAGE" == esb ]]; then
+            case "$APP" in
+              radio-tx) filename=01-transmitter-esb-nologo-26000.uf2 ;;
+              usb-rx) filename=02-receiver-esb-nologo-26000.uf2 ;;
+            esac
+          fi
+          cp build/zephyr/zephyr.uf2 "package/$filename"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.app }}-${{ inputs.stage }}-${{ github.sha }}
-          path: build/zephyr/zephyr.uf2
+          path: package/*.uf2
           if-no-files-found: error
 
   pico:

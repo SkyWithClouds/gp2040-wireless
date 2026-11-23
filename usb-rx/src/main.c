@@ -7,6 +7,12 @@
 #include <usb_descriptor.h>
 
 #include "reports.h"
+#ifdef BRIDGE_ESB
+#include "air.h"
+#include "receiver.h"
+static atomic_t bus_epoch;
+static atomic_t completions;
+#endif
 
 enum { EP_IN = 0x81, EP_OUT = 0x02, MPS = 32, MS_REQUEST = 0x20 };
 
@@ -57,7 +63,7 @@ static atomic_t configured;
 static atomic_t suspended;
 static atomic_t in_flight;
 static atomic_t sequence_start;
-/* One snapshot for the next integration stage: valid bit 24, generation 8..23, mode 0..7. */
+/* Atomic OUT snapshot: valid bit 24, generation 8..23, mode 0..7. */
 static atomic_t player_led;
 static uint8_t report[XINPUT_REPORT_BYTES];
 
@@ -79,6 +85,9 @@ static void on_in(uint8_t ep, enum usb_dc_ep_cb_status_code status)
 {
 	ARG_UNUSED(ep);
 	if (status == USB_DC_EP_DATA_IN) {
+#ifdef BRIDGE_ESB
+		atomic_inc(&completions);
+#endif
 		atomic_clear(&in_flight);
 	}
 }
@@ -87,6 +96,9 @@ static void on_usb_status(enum usb_dc_status_code status, const uint8_t *param)
 {
 	switch (status) {
 	case USB_DC_CONFIGURED:
+#ifdef BRIDGE_ESB
+		atomic_inc(&bus_epoch);
+#endif
 		atomic_set(&sequence_start, k_uptime_get_32());
 		atomic_clear(&in_flight);
 		atomic_clear(&suspended);
@@ -94,6 +106,9 @@ static void on_usb_status(enum usb_dc_status_code status, const uint8_t *param)
 		break;
 	case USB_DC_RESET:
 	case USB_DC_DISCONNECTED:
+#ifdef BRIDGE_ESB
+		atomic_inc(&bus_epoch);
+#endif
 		atomic_clear(&configured);
 		atomic_clear(&in_flight);
 		atomic_clear(&player_led);
@@ -115,6 +130,58 @@ USBD_DEFINE_CFG_DATA(xinput) = {
 	.endpoint = endpoints,
 };
 
+#ifdef BRIDGE_ESB
+static void stream_radio(void)
+{
+	struct receiver rx = {.neutral = true};
+	struct delivery pending;
+	bool submitted = false;
+	atomic_val_t epoch = atomic_get(&bus_epoch), baseline = 0;
+	for (;;) {
+		uint32_t now = k_uptime_get_32();
+		atomic_val_t current = atomic_get(&bus_epoch);
+		if (epoch != current) {
+			receiver_reset(&rx);
+			submitted = false;
+			epoch = current;
+		}
+		receiver_tick(&rx, now);
+		if (submitted && atomic_get(&completions) != baseline) {
+			receiver_complete(&rx, &pending, now);
+			submitted = false;
+		}
+		struct gp_frame f;
+		while (air_receive(&f)) {
+			if (!atomic_get(&configured) || f.type == GP_STATUS || f.type == GP_OFFER)
+				continue;
+			struct gp_frame reply = receiver_frame(&rx, &f, now, atomic_get(&player_led),
+							       air_nonce);
+			air_send(&reply); /* Next PTX packet clocks out this cumulative response. */
+		}
+		if (!submitted && atomic_get(&configured) && !atomic_get(&suspended) &&
+		    receiver_peek(&rx, &pending) && atomic_cas(&in_flight, 0, 1)) {
+			struct gp_input *s = &pending.input;
+			memset(report, 0, sizeof(report));
+			report[1] = sizeof(report);
+			sys_put_le16(s->buttons, report + 2);
+			report[4] = s->lt;
+			report[5] = s->rt;
+			sys_put_le16(s->lx, report + 6);
+			sys_put_le16(s->ly, report + 8);
+			sys_put_le16(s->rx, report + 10);
+			sys_put_le16(s->ry, report + 12);
+			uint32_t written;
+			baseline = atomic_get(&completions);
+			if (usb_write(EP_IN, report, sizeof(report), &written) || written != sizeof(report))
+				atomic_clear(&in_flight);
+			else
+				submitted = true;
+		}
+		k_sleep(K_USEC(250));
+	}
+}
+#endif
+
 int main(void)
 {
 	/* The legacy core allocates the first free endpoint in each direction.
@@ -133,6 +200,11 @@ int main(void)
 		return err;
 	}
 
+#ifdef BRIDGE_ESB
+	err = air_start(true);
+	if (err) return err;
+	stream_radio();
+#else
 	for (;;) {
 		if (atomic_get(&configured) && !atomic_get(&suspended) &&
 		    atomic_cas(&in_flight, 0, 1)) {
@@ -146,4 +218,6 @@ int main(void)
 		}
 		k_sleep(K_MSEC(1));
 	}
+#endif
+	return 0;
 }
