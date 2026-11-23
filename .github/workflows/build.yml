@@ -1,0 +1,113 @@
+name: Bridge CI
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: Hardware integration stage
+        type: choice
+        required: true
+        options: [xinput, esb, full]
+permissions:
+  contents: read
+
+jobs:
+  protocol:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify wire vectors and malformed records
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -pedantic -Icommon tests/protocol_test.c -o /tmp/test-protocol
+          /tmp/test-protocol
+          cc -std=c11 -Wall -Wextra -Werror -pedantic -Iusb-rx/src tests/xinput_test.c usb-rx/src/reports.c -o /tmp/test-xinput
+          /tmp/test-xinput
+
+  nordic:
+    if: github.event_name == 'workflow_dispatch'
+    needs: protocol
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        app: ${{ fromJSON(inputs.stage == 'xinput' && '["usb-rx"]' || '["usb-rx","radio-tx"]') }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: bridge
+      - name: Check stage sources and board definition
+        env:
+          APP: ${{ matrix.app }}
+        run: |
+          test -f "bridge/$APP/CMakeLists.txt" || { echo "::error::Firmware stage source is pending"; exit 1; }
+          test -f bridge/boards/nologo/nologo_promicro/board.yml || { echo "::error::NOLOGO board definition is pending"; exit 1; }
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Set up pinned Nordic sources and Arm toolchain
+        uses: zephyrproject-rtos/action-zephyr-setup@cc223fe61661d8573c1cd3f95f72f90cce729ae9
+        with:
+          app-path: bridge
+          sdk-version: 0.16.8
+          west-version: 1.5.0
+          toolchains: arm-zephyr-eabi
+          enable-ccache: 'false'
+      - name: Build NOLOGO UF2
+        env:
+          APP: ${{ matrix.app }}
+          STAGE: ${{ inputs.stage }}
+        run: |
+          export ZEPHYR_BASE="$PWD/zephyr"
+          west build --no-sysbuild -b nologo_promicro/nrf52840 -d build "bridge/$APP" -- \
+            -DBOARD_ROOT="$PWD/bridge" -DBRIDGE_STAGE="$STAGE"
+          python3 bridge/scripts/check_receiver_uf2.py build/zephyr/zephyr.uf2 build/zephyr/zephyr.bin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.app }}-${{ inputs.stage }}-${{ github.sha }}
+          path: build/zephyr/zephyr.uf2
+          if-no-files-found: error
+
+  pico:
+    if: github.event_name == 'workflow_dispatch' && inputs.stage == 'full'
+    needs: protocol
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: bridge
+      - name: Check stage source
+        run: test -f bridge/pico-host/CMakeLists.txt || { echo "::error::Pico host stage source is pending"; exit 1; }
+      - uses: actions/checkout@v4
+        with:
+          repository: raspberrypi/pico-sdk
+          ref: a1438dff1d38bd9c65dbd693f0e5db4b9ae91779
+          path: deps/pico-sdk
+          submodules: recursive
+      - uses: actions/checkout@v4
+        with:
+          repository: sekigon-gonnoc/Pico-PIO-USB
+          ref: b186e36bea0f3bcc2ee94ca1fa81e7f71281443a
+          path: deps/pio-usb
+      - uses: actions/checkout@v4
+        with:
+          repository: Ryzee119/tusb_xinput
+          ref: d202fcfbd6d0a1f38c7b203696ac13776b39e601
+          path: deps/tusb_xinput
+      - name: Install Pico toolchain and build
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib libusb-1.0-0-dev ninja-build
+          cmake -S bridge/pico-host -B build -G Ninja -DPICO_BOARD=pico \
+            -DPICO_SDK_PATH="$PWD/deps/pico-sdk" -DPICO_PIO_USB_PATH="$PWD/deps/pio-usb" \
+            -DTUSB_XINPUT_PATH="$PWD/deps/tusb_xinput" -DPICOTOOL_GIT_BRANCH=a7eb3988f0645239185fadb4e25d8279478c2dbb
+          cmake --build build
+          test -s build/pico-host.uf2
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pico-host-full-${{ github.sha }}
+          path: build/pico-host.uf2
+          if-no-files-found: error

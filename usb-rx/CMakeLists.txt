@@ -1,0 +1,10 @@
+cmake_minimum_required(VERSION 3.20.0)
+set(BRIDGE_STAGE "xinput" CACHE STRING "Bridge integration stage")
+if(NOT BRIDGE_STAGE STREQUAL "xinput")
+  message(FATAL_ERROR "The receiver implements the xinput stage only")
+endif()
+find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
+project(bridge_xinput)
+# Pinned legacy USB stack supplies OS 1.0 registration and descriptor fixup.
+target_include_directories(app PRIVATE ${ZEPHYR_BASE}/subsys/usb/device)
+target_sources(app PRIVATE src/main.c src/reports.c)
