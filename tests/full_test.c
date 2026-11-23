@@ -145,6 +145,19 @@ static void bridge_run(void)
 	b.spi_paused = false;
 	advance(&b, 20000);
 	assert(b.pico.active && b.log[b.delivered-1].input.buttons == 2);
+
+	/* Either Nordic can reboot first while the physical Hitbox stays held. */
+	old = b.pico.session;
+	receiver_reset(&b.rx);
+	b.ack = (struct gp_frame){0};
+	advance(&b, 100000);
+	assert(b.pico.active && b.pico.session != old && b.log[b.delivered-1].input.buttons == 2);
+	old = b.pico.session;
+	b.tx = (struct transmitter){0};
+	tx_reset(&b.tx, GP_REBOOT);
+	b.miso = b.tx.reset;
+	advance(&b, 100000);
+	assert(b.pico.active && b.pico.session != old && b.log[b.delivered-1].input.buttons == 2);
 }
 
 static void queue_edges(void)

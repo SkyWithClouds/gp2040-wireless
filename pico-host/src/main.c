@@ -108,6 +108,7 @@ static void service_spi(uint32_t now)
 	if (!gp_encode(tx, sizeof(tx), &f)) panic("invalid SPI record");
 	gpio_put(CS, 0);
 	spi_write_read_blocking(spi0, tx, rx, sizeof(rx));
+	while (spi_is_busy(spi0)) tight_loop_contents();
 	gpio_put(CS, 1);
 	if (gp_decode(&f, rx, sizeof(rx))) source_reply(&bridge, time_us_32(), &f);
 	else pad.bad_spi++;
@@ -118,15 +119,15 @@ static void log_status(uint32_t now)
 	static uint32_t last;
 	if (now - last < 1000000 || !tud_cdc_connected()) return;
 	last = now;
-	char line[220];
+	char line[240];
 	int len = snprintf(line, sizeof(line),
 		"pad=%u active=%u reports=%lu changes=%lu seq=%u tx=%u rx=%u done=%u "
-		"resets=%lu reason=%u spi_bad=%lu poll_late=%lu led_out=%lu mode=%u gen=%u applied=%u\r\n",
+		"resets=%lu reason=%u spi_bad=%lu poll_late=%lu led_out=%lu mode=%u gen=%u applied=%u applied_gen=%u\r\n",
 		pad.addr, bridge.active, (unsigned long)pad.reports, (unsigned long)bridge.changes,
 		bridge.produced, bridge.accepted, bridge.rx_accept, bridge.done,
 		(unsigned long)bridge.resets, bridge.last_reason, (unsigned long)pad.bad_spi,
 		(unsigned long)bridge.overdue, (unsigned long)pad.led_success,
-		bridge.led_mode, bridge.led_gen, bridge.applied_valid);
+		bridge.led_mode, bridge.led_gen, bridge.applied_valid, bridge.applied_gen);
 	if (len > 0 && (size_t)len < sizeof(line) && tud_cdc_write_available() >= (unsigned)len) {
 		tud_cdc_write(line, len);
 		tud_cdc_write_flush();

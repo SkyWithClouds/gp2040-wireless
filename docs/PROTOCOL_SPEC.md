@@ -1,6 +1,6 @@
 # GP2040-CE 外挂无线桥协议 v1.0
 
-本规范定义固定绑定、单人桌面样机的行为。上行依次为 Hitbox → Pico → 发射端 NOLOGO（TX）→ 接收端 NOLOGO（RX）→ Windows；下行承载确认和玩家灯。当前已完成协议与 CI 骨架，三端固件处于分阶段开发状态。协议实现须同时满足下列状态规则及仓库的[编解码定义](../common/protocol.h)和[固定向量](../tests/protocol_test.c)。
+本规范定义固定绑定、单人桌面样机的行为。上行依次为 Hitbox → Pico → 发射端 NOLOGO（TX）→ 接收端 NOLOGO（RX）→ Windows；下行承载确认和玩家灯。各阶段实现及实板验收状态见[仓库主页](../README.md)。协议实现须同时满足下列状态规则及仓库的[编解码定义](../common/protocol.h)和[固定向量](../tests/protocol_test.c)。
 
 ## 1. 输入报告边界
 

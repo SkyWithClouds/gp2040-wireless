@@ -1,6 +1,6 @@
 # 开发与实板验收
 
-**当前已完成协议与 CI 骨架，三端固件处于分阶段开发状态。** 阶段 1 免驱、输入与 1P 灯通过实板验收。两块板的引导器信息见[实板记录](../boards/nologo/nologo_promicro/README.md)。阶段 2 已提供双板固件，等待实板验收。固件在 GitHub Actions 构建，按接收端、双板无线、完整链路的顺序上板。字节偏移、超时和确认语义以 [v1.0 协议规范](PROTOCOL_SPEC.md) 为准。
+阶段 1 已在 Windows 验收免驱、输入与 1P 灯。阶段 2 和阶段 3 已通过云端构建，双板无线和全链路待实板验收。[两块 NOLOGO 的引导器记录](../boards/nologo/nologo_promicro/README.md) · [v1.0 线格式与确认语义](PROTOCOL_SPEC.md)
 
 ## 模块边界
 
@@ -37,7 +37,7 @@ cc -std=c11 -Wall -Wextra -Werror -pedantic -Icommon tests/protocol_test.c -o /t
 
 ## GitHub Actions 构建入口
 
-仓库上线后，确认 [工作流](../.github/workflows/build.yml) 位于默认分支且仓库已启用 Actions。具有写权限的贡献者可在 **Actions → Bridge CI → Run workflow** 选择分支和 `stage`，再点 **Run workflow**。也可以从已关联该仓库的检出目录运行：
+[工作流](../.github/workflows/build.yml) 位于默认分支。具有写权限的贡献者可在 **Actions → Bridge CI → Run workflow** 选择分支和 `stage`，再点 **Run workflow**。也可以从已关联该仓库的检出目录运行：
 
 ```sh
 gh workflow run build.yml -f stage=xinput
@@ -51,13 +51,13 @@ gh workflow run build.yml -f stage=xinput
 | `esb` | `usb-rx`、`radio-tx` | `usb-rx-esb-<sha>`、`radio-tx-esb-<sha>` |
 | `full` | 两个 nRF 应用及 `pico-host` | `usb-rx-full-<sha>`、`radio-tx-full-<sha>`、`pico-host-full-<sha>` |
 
-nRF 任务使用 Zephyr Arm 工具链 0.16.8、[west 清单](../west.yml) 中的 nRF Connect SDK v2.9.2、`--no-sysbuild` 和 `BRIDGE_STAGE`，期望产物为 `build/zephyr/zephyr.uf2`。Pico 任务从工作流指定的提交取 Pico SDK、Pico-PIO-USB 和 tusb_xinput，传入 `PICO_BOARD=pico`，应用须通过 `pico_add_extra_outputs` 产生 `build/pico-host.uf2`。两个 nRF 应用及 Pico 应用都需提供自己的 `CMakeLists.txt`。当前可以选择 `xinput` 或 `esb`。`full` 尚待实现。上传 UF2 前，工作流会检查每块写地址、Family ID、初始栈指针与复位向量，并将负载同链接生成的二进制比对。
+nRF 任务使用 Zephyr Arm 工具链 0.16.8 和 [west 清单](../west.yml) 中的 nRF Connect SDK v2.9.2，通过 `--no-sysbuild` 和 `BRIDGE_STAGE` 选择应用。Pico 任务按提交固定 Pico SDK、Pico-PIO-USB、tusb_xinput 及 picotool。使用 `PICO_BOARD=pico` 和 `pico_add_extra_outputs` 生成 RP2040 UF2。上传前逐块验证 Family ID、Flash 地址、复位向量及负载与链接二进制是否一致。首次手动 `full` 运行的协议测试、两个 Nordic 构建和 Pico 构建全部通过。[构建记录](https://github.com/SkyWithClouds/gp2040-wireless/actions/runs/45192790253)
 
 ## 实板验收顺序
 
 ### 1 · 接收端 XInput 枚举
 
-当前分区定义为`[0x26000, 0xEC000)` 为应用，其后保留存储区，`0xF4000` 起为引导器及设置。Family ID 为 `0xADA52840`。刷写前核对两块板各自的引导器资料；若实板要求 `0x27000` 等其他起址，先修改设备树及 UF2 校验脚本后重新构建。[nice!nano 参考布局](https://github.com/zmkfirmware/zmk/blob/main/app/module/boards/nicekeyboards/nice_nano/nice_nano.dts)
+当前应用分区为 `[0x26000, 0xEC000)`，其后保留存储区，`0xF4000` 起为引导器及设置。Family ID 为 `0xADA52840`。刷写前核对两块板各自的引导器资料；若实板要求 `0x27000` 等其他起址，先修改设备树及 UF2 校验脚本后重新构建。[nice!nano 参考布局](https://github.com/zmkfirmware/zmk/blob/main/app/module/boards/nicekeyboards/nice_nano/nice_nano.dts)
 
 阶段 1 使用共享私有测试 VID/PID `1209:0001`，这个编号不唯一，仅限内部试验。发行硬件前请在 `usb-rx/prj.conf` 换成获分配的 VID/PID。若 Windows 缓存了另一台相同 VID/PID 的测试设备，使用干净的 Windows 实例复测。[pid.codes 测试编号使用条件](https://pid.codes/1209/0001/)
 
@@ -84,6 +84,30 @@ gh workflow run build.yml -f stage=esb
 - 用能按协议驱动 SPI 的测试主机检查 #1 的 SCK、CS、READY 和 MISO；逻辑分析仪核对准备、撤销、24 字节事务和下一次确认。记录有积压时的拉取间隔、空闲心跳以及灯状态的 ACK Payload。真实 Pico 与原板的灯效留到下一阶段。
 
 ### 3 · Pico 与真实 Hitbox
+
+```sh
+cc -std=c11 -Wall -Wextra -Werror -pedantic -Icommon -Ipico-host/src -Iusb-rx/src -Iradio-tx/src \
+  tests/full_test.c pico-host/src/source.c usb-rx/src/receiver.c radio-tx/src/transmitter.c -o /tmp/test-full
+/tmp/test-full
+gh workflow run build.yml --ref main -f stage=full
+```
+
+该测试将三个固件的状态机串接，模拟上一事务预装的 MISO、下一次无线事务返回的 ACK 及 Windows 每毫秒完成一份 IN。用 120 次连续 1 kHz 输入变化叠加一次无线丢包和一次 ACK 丢失，比较最终 USB 报告。另测窗口满、USB 停滞、32 条缓冲溢出、单板重启、LED 版本回绕及拔插。这里的毫秒值来自模拟时钟，实板延迟应单独测量。
+
+Pico 的系统时钟设为 120 MHz。原生 USB 端口 0 提供 CDC，PIO-USB 端口 1 在 GP0/GP1 上运行。两套 TinyUSB 任务在同一主循环非阻塞调度。固定版本的 `tusb_xinput` 在构建目录应用 [适配补丁](../pico-host/tusb_xinput.patch)，对齐 SDK 的类驱动 ABI，给有线 XInput 中断 IN 设置 1 ms 轮询间隔。设备可以 NAK，只有完整的 20 字节报告才生成输入快照。读取原始按键字、扳机和四轴，每个不同状态保留一次。
+
+`source.c` 只在收到第一份有效原板报告后发 HELLO。SPI 会话切换时冻结 SYNC 快照，后续变化入 32 条缓冲。飞行窗口最多 8 帧，按 `usb_done` 释放。#1 的 `full` 构建只接受 SPI 输入，#2 共用阶段 2 的 ESB 和 USB 交付路径。实板测量需计入主机轮询、射频重传和等待 SPI READY 的时间。
+
+原生 Micro-USB 打开 CDC 后每秒输出一行。用其连接电脑供电时，按玩家指南隔离外部 5 V。Pico 的 CDC 使用样机测试编号 `1209:0002`。
+
+| 日志字段 | 核对内容 |
+|---|---|
+| `pad / active / reports / changes` | 上游 USB 地址、同步是否完成、收到的有效报告数、实际变化数 |
+| `seq / tx / rx / done` | 当前序号和三跳累计进度，稳定长按时四个值应追平 |
+| `resets / reason / spi_bad / poll_late` | 会话恢复次数、最近的复位原因、SPI 校验失败数、等待确认时超过 2 ms 的调度次数 |
+| `led_out / mode / gen / applied / applied_gen` | 原板 OUT 成功次数、最近主机灯命令与版本、本会话是否有成功回执及最后成功的版本 |
+
+USBPcap 可记录 PC 一侧的 IN 和 `01 03 mode` OUT。要验证 Pico 实际的 1 ms IN 轮询、SPI 硬件 READY 和端到端延迟，用 USB 分析仪或逻辑分析仪在同一时钟基准采集相应的信号。长按期间减少重复 USB 报告是正常现象。
 
 先把同一块 Hitbox 直连同一台 Windows PC 记录基线，再接入全链路。将 Pico 读到的 XInput 报告与 Windows 接收报告逐字段、逐事件比较。
 
