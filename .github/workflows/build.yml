@@ -21,6 +21,7 @@ jobs:
         run: |
           cc -std=c11 -Wall -Wextra -Werror -pedantic -Icommon tests/protocol_test.c -o /tmp/test-protocol
           /tmp/test-protocol
+          cc -std=c11 -Wall -Wextra -Werror -Icommon tests/survey_test.c -o /tmp/survey && /tmp/survey
           cc -std=c11 -Wall -Wextra -Werror -pedantic -Iusb-rx/src tests/xinput_test.c usb-rx/src/reports.c -o /tmp/test-xinput
           /tmp/test-xinput
           cc -std=c11 -Wall -Wextra -Werror -pedantic -Icommon -Iusb-rx/src -Iradio-tx/src \
