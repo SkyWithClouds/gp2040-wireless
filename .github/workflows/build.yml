@@ -114,13 +114,25 @@ jobs:
           repository: Ryzee119/tusb_xinput
           ref: d202fcfbd6d0a1f38c7b203696ac13776b39e601
           path: deps/tusb_xinput
-      - name: Install Pico toolchain and build
+      - name: Install verified Arm embedded toolchain
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib libusb-1.0-0-dev pkg-config patch ninja-build
+          set -euo pipefail
+          archive=xpack-arm-none-eabi-gcc-13.3.1-1.1-linux-x64.tar.gz
+          curl --fail --location --retry 3 --connect-timeout 15 --max-time 240 \
+            "https://github.com/xpack-dev-tools/arm-none-eabi-gcc-xpack/releases/download/v13.3.1-1.1/$archive" -o "$RUNNER_TEMP/$archive"
+          cd "$RUNNER_TEMP"
+          echo "006c89337eced277fdf4c1c3bf3aebe55c85e8d52cba8d412009717fb781b959  $archive" | sha256sum -c -
+          mkdir arm-toolchain
+          tar -xzf "$archive" -C arm-toolchain --strip-components=1
+          "$RUNNER_TEMP/arm-toolchain/bin/arm-none-eabi-gcc" --version
+          echo "$RUNNER_TEMP/arm-toolchain/bin" >> "$GITHUB_PATH"
+      - name: Configure RP2040 application
+        run: |
           cmake -S bridge/pico-host -B build -G Ninja -DPICO_BOARD=pico \
             -DPICO_SDK_PATH="$PWD/deps/pico-sdk" -DPICO_PIO_USB_PATH="$PWD/deps/pio-usb" \
             -DTUSB_XINPUT_PATH="$PWD/deps/tusb_xinput" -DPICOTOOL_GIT_BRANCH=a7eb3988f0645239185fadb4e25d8279478c2dbb
+      - name: Build and validate Pico firmware
+        run: |
           cmake --build build
           python3 bridge/scripts/check_receiver_uf2.py build/pico-host.uf2 build/pico-host.bin --pico
           cp build/pico-host.uf2 build/01-pico-host-full.uf2
