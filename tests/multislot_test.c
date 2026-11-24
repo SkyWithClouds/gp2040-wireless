@@ -71,8 +71,61 @@ static void concurrent(unsigned count)
     b.tx[0].slots=count+1;
     if(count<4) assert(!transmit(&b,0,hello,104));
 }
+static void saturated_windows(void)
+{
+    struct bench b={.rx=match_factory(PC_RX)};
+    b.rx.slots=4;
+    for(unsigned i=0;i<4;i++) {
+        b.tx[i]=match_factory(HITBOX);
+        b.tx[i].slots=i+1;
+        join(&b,i,0);
+    }
+    /* Lose P2 sequence 3, deliver later numbers out of order, then replay.
+       Hold all four USB endpoints busy until all 32 RF input snapshots arrive. */
+    for(unsigned seq=1;seq<=GP_WINDOW;seq++) {
+        for(unsigned i=0;i<4;i++) {
+            if(i==1 && seq==3) continue;
+            struct gp_frame f={.type=GP_INPUT,.session=b.session[i],
+                .data.input={.seq=seq,.buttons=(uint16_t)(16*i+seq)}};
+            assert(transmit(&b,i,f,seq));
+            assert(b.ack[i].data.status.usb_done==0);
+        }
+    }
+    assert(b.receivers[1].accepted==2);
+    for(unsigned seq=3;seq<=GP_WINDOW;seq++) {
+        struct gp_frame replay={.type=GP_INPUT,.session=b.session[1],
+            .data.input={.seq=seq,.buttons=(uint16_t)(16+seq)}};
+        assert(transmit(&b,1,replay,10));
+    }
+    for(unsigned i=0;i<4;i++) assert(b.receivers[i].count==GP_WINDOW);
+    struct delivery stale;
+    assert(receiver_peek(&b.receivers[0],&stale));
+    for(unsigned i=1;i<4;i++) {
+        for(unsigned seq=1;seq<=GP_WINDOW;seq++) {
+            struct delivery d;
+            assert(receiver_peek(&b.receivers[i],&d));
+            assert(d.session==b.session[i] && d.input.seq==seq && d.input.buttons==16*i+seq);
+            receiver_complete(&b.receivers[i],&d,12+seq);
+        }
+        struct gp_frame f={.type=GP_POLL,.session=b.session[i]};
+        assert(transmit(&b,i,f,30) && b.ack[i].data.status.usb_done==GP_WINDOW);
+    }
+    /* P1 USB stalls for 50 ms. Other sessions continue to receive heartbeats. */
+    for(unsigned i=1;i<4;i++) {
+        struct gp_frame f={.type=GP_HEARTBEAT,.session=b.session[i],.data.heartbeat.number=1};
+        assert(transmit(&b,i,f,40));
+    }
+    for(unsigned i=0;i<4;i++) receiver_tick(&b.receivers[i],51);
+    assert(!b.receivers[0].session);
+    for(unsigned i=1;i<4;i++) assert(b.receivers[i].session==b.session[i]);
+    join(&b,0,52);
+    receiver_complete(&b.receivers[0],&stale,53);
+    assert(b.receivers[0].done==0);
+}
+
 int main(void)
 {
+    saturated_windows();
     concurrent(2);concurrent(4);
     struct match m=match_factory(HITBOX);
     const uint8_t legacy[]={0xb7,0x46,0x32,0xda};
