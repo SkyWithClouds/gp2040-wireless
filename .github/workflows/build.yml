@@ -29,15 +29,18 @@ jobs:
           cc -std=c11 -Wall -Wextra -Werror -pedantic -Icommon -Ipico-host/src -Iusb-rx/src -Iradio-tx/src \
             tests/full_test.c pico-host/src/source.c usb-rx/src/receiver.c radio-tx/src/transmitter.c -o /tmp/test-full
           /tmp/test-full
+          cc -std=c11 -Wall -Wextra -Werror -Icommon -Iusb-rx/src tests/multislot_test.c usb-rx/src/receiver.c -o /tmp/multislot
+          /tmp/multislot
 
   nordic:
-    if: github.event_name == 'workflow_dispatch'
+    container:
+      image: ghcr.io/nrfconnect/sdk-nrf-toolchain@sha256:d5dac06a877ca7f7bc75f851a7720284796424304045dd681cc6c4a29340ef0c
     needs: protocol
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        app: ${{ fromJSON(inputs.stage == 'xinput' && '["usb-rx"]' || '["usb-rx","radio-tx"]') }}
+        include: ${{ fromJSON(inputs.stage == 'xinput' && '[{"stage":"xinput","app":"usb-rx"}]' || inputs.stage == 'esb' && '[{"stage":"esb","app":"usb-rx"},{"stage":"esb","app":"radio-tx"}]' || inputs.stage == 'full' && '[{"stage":"full","app":"usb-rx"},{"stage":"full","app":"radio-tx"}]' || '[{"stage":"xinput","app":"usb-rx"},{"stage":"esb","app":"usb-rx"},{"stage":"esb","app":"radio-tx"},{"stage":"full","app":"usb-rx"},{"stage":"full","app":"radio-tx"}]') }}
     defaults:
       run:
         shell: bash
@@ -51,28 +54,21 @@ jobs:
         run: |
           test -f "bridge/$APP/CMakeLists.txt" || { echo "::error::Firmware stage source is pending"; exit 1; }
           test -f bridge/boards/nologo/nologo_promicro/board.yml || { echo "::error::NOLOGO board definition is pending"; exit 1; }
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Set up pinned Nordic sources and Arm toolchain
-        uses: zephyrproject-rtos/action-zephyr-setup@cc223fe61661d8573c1cd3f95f72f90cce729ae9
-        with:
-          app-path: bridge
-          sdk-version: 0.16.8
-          west-version: 1.5.0
-          toolchains: arm-zephyr-eabi
-          enable-ccache: 'false'
+      - name: Fetch pinned NCS v2.9.2
+        run: |
+          west init -l bridge
+          west update --narrow -o=--depth=1
       - name: Build NOLOGO UF2
         env:
           APP: ${{ matrix.app }}
-          STAGE: ${{ inputs.stage }}
+          STAGE: ${{ matrix.stage }}
         run: |
           export ZEPHYR_BASE="$PWD/zephyr"
           west build --no-sysbuild -b nologo_promicro/nrf52840 -d build "bridge/$APP" -- \
             -DBOARD_ROOT="$PWD/bridge" -DBRIDGE_STAGE="$STAGE"
           python3 bridge/scripts/check_receiver_uf2.py build/zephyr/zephyr.uf2 build/zephyr/zephyr.bin
           mkdir -p package
-          filename=zephyr.uf2
+          filename=usb-rx-xinput-nologo-26000.uf2
           if [[ "$STAGE" == esb ]]; then
             case "$APP" in
               radio-tx) filename=01-transmitter-esb-nologo-26000.uf2 ;;
@@ -87,13 +83,13 @@ jobs:
           cp build/zephyr/zephyr.uf2 "package/$filename"
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.app }}-${{ inputs.stage }}-${{ github.sha }}
+          name: ${{ matrix.app }}-${{ matrix.stage }}-${{ github.sha }}
           path: package/*.uf2
           if-no-files-found: error
 
   pico:
     name: pico-host
-    if: github.event_name == 'workflow_dispatch' && inputs.stage == 'full'
+    if: inputs.stage == '' || inputs.stage == 'full'
     needs: protocol
     runs-on: ubuntu-24.04
     steps:
@@ -133,3 +129,31 @@ jobs:
           name: pico-host-full-${{ github.sha }}
           path: build/01-pico-host-full.uf2
           if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [nordic, pico]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish checked firmware and SHA-256 manifest
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(*.uf2)
+          test "${#files[@]}" -eq 6
+          sha256sum "${files[@]}" > SHA256SUMS.txt
+          sha256sum -c SHA256SUMS.txt
+          opts=()
+          if [[ "$TAG" == *-* ]]; then opts+=(--prerelease); fi
+          gh release create "$TAG" "${files[@]}" SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" \
+            --verify-tag --title "$TAG" --generate-notes "${opts[@]}"

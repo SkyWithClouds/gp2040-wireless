@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include <zephyr/kernel.h>
 #include "air.h"
+#include "match_usb.h"
 #include "spi.h"
 #include "transmitter.h"
 
@@ -85,7 +86,10 @@ int main(void)
 	bool external = false;
 #endif
 	tx_reset(&tx, GP_REBOOT);
-	int rc = air_start(false);
+	match_init(BRIDGE_TX);
+	int rc = match_usb_open(0);
+	if (rc) return rc;
+	rc = air_start(false);
 	if (rc) return rc;
 	rc = spi_init();
 	if (rc) return rc;
@@ -113,6 +117,7 @@ int main(void)
 			if (rc) return rc;
 		}
 		tx_schedule(&tx, k_ticks_to_us_floor32(k_uptime_ticks()), air_send);
+		match_usb_service();
 		k_sleep(K_USEC(200));
 	}
 }

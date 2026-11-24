@@ -8,7 +8,7 @@
 
 单独使用 **#2 接收板** 就能测试。先按下文的双复位步骤保存 `INFO_UF2.TXT`，按[开发指南](DEVELOPMENT.md)核对应用起址为 `0x26000`。芯片型号和 UF2 Family ID 相同仍可能对应不同的引导器布局。
 
-打开 **Actions → Bridge CI** 中成功的手动 `xinput` 运行，从 Artifacts 下载 `usb-rx-xinput-<提交号>`，解压并将其中的 `zephyr.uf2` 拖入 #2 引导盘。重启后用 USB 数据线接 Windows 10/11。在 `joy.cpl` 选择新控制器，打开“属性 → 测试”。每步约 1 秒，每 8 秒重复一圈：
+打开 **Actions → Bridge CI** 中成功的手动 `xinput` 运行，从 Artifacts 下载 `usb-rx-xinput-<提交号>`，解压并将其中的 `usb-rx-xinput-nologo-26000.uf2` 拖入 #2 引导盘。重启后用 USB 数据线接 Windows 10/11。在 `joy.cpl` 选择新控制器，打开“属性 → 测试”。每步约 1 秒，每 8 秒重复一圈：
 
 | 秒 | 预计看到 |
 |---|---|

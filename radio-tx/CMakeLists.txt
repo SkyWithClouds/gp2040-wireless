@@ -9,3 +9,5 @@ target_sources(app PRIVATE src/main.c src/spi.c src/transmitter.c ../common/air.
 if(BRIDGE_STAGE STREQUAL "esb")
   target_compile_definitions(app PRIVATE BRIDGE_DEMO=1)
 endif()
+
+target_sources(app PRIVATE ../common/match.c ../common/match_usb.c)
